@@ -5,10 +5,10 @@ read-only, security-scoped access to multiple database engines —
 PostgreSQL, DynamoDB, and MongoDB Atlas — for use by AI agents (Claude
 Code, Claude Desktop, or any MCP-compatible client).
 
-Status: early scaffolding + Postgres tools in progress. See
-[ARCHITECTURE.md](./ARCHITECTURE.md) for the full design, security model,
-and current tool inventory, and the phase checklist below for what's done
-vs. planned.
+Status: Postgres and DynamoDB tools working end-to-end, tested through
+Claude Code as a real MCP client. See [ARCHITECTURE.md](./ARCHITECTURE.md)
+for the full design, security model, and current tool inventory, and the
+phase checklist below for what's done vs. planned.
 
 ## Why this project
 
@@ -78,6 +78,20 @@ search returns sensible (not just error-free) results:
 python scripts/verify_demo_dataset.py
 ```
 
+## DynamoDB
+
+Tables aren't configured via environment variables — accessible tables
+come from a fixed registry in `engines/dynamodb.py` (`_TABLE_TARGETS`),
+the same allowlist pattern Postgres uses for vector search. The agent
+selects a table by a logical `target_name`, never a raw AWS table name.
+Set `AWS_REGION` (and standard AWS credentials via env vars/profile/
+instance role) to enable the `*_dynamodb_*` tools; the credentials should
+carry an IAM policy scoped to exactly `dynamodb:GetItem`,
+`dynamodb:Scan`, and `dynamodb:DescribeTable` on the registered table
+ARN(s) — see the "documented boundary" note in `ARCHITECTURE.md` for why
+that IAM policy, not the absence of a write method in this code, is the
+actual guardrail.
+
 ## Project layout
 
 ```
@@ -87,7 +101,7 @@ src/mcp_dbserver/
   config.py            # env-var credential loading, per engine
   engines/
     postgres.py         # implemented
-    dynamodb.py          # planned
+    dynamodb.py          # implemented
     mongodb.py            # planned
   server.py            # MCP entrypoint, registers tools per configured engine
 tests/                  # guardrail/allowlist/engine unit tests (no live DB needed)
@@ -97,9 +111,9 @@ tests/                  # guardrail/allowlist/engine unit tests (no live DB need
 
 - [x] Phase 0 — project skeleton
 - [x] Phase 1 — architecture & security design (`ARCHITECTURE.md`)
-- [ ] Phase 2 — Postgres/pgvector tools against a real demo dataset
-- [ ] Phase 3 — DynamoDB
+- [x] Phase 2 — Postgres/pgvector tools against a real demo dataset
+- [x] Phase 3 — DynamoDB
 - [ ] Phase 4 — MongoDB Atlas
-- [ ] Phase 5 — wired up and tested with a real MCP client
+- [x] Phase 5 — wired up and tested with a real MCP client (Claude Code)
 - [ ] Phase 6 — full README with architecture diagram, tool table, "what
       I'd do differently at production scale"

@@ -22,8 +22,8 @@ synthetic, generated specifically for this project.
 
 | Engine | Status | Notes |
 |---|---|---|
-| PostgreSQL + pgvector | In progress (Phase 2) | Allowlisted queries + cosine-distance vector search |
-| DynamoDB | Planned (Phase 3) | `get_item` / `query_table`, table-name allowlist |
+| PostgreSQL + pgvector | Working (Phase 2/5) | Allowlisted queries + cosine-distance vector search, tested end-to-end via Claude Code |
+| DynamoDB | Working (Phase 3) | `get_item` / capped `scan` / approximate count, fixed table-target registry |
 | MongoDB Atlas + Vector Search | Planned (Phase 4) | Scoped `find`, `$vectorSearch` |
 
 ## Tool inventory
@@ -36,8 +36,10 @@ Tools are the only surface an agent ever sees — there is no generic
 | `query_postgres(query_name, params)` | Postgres | Runs one named, allowlisted, parameterized SELECT |
 | `list_postgres_queries()` | Postgres | Lists the query names `query_postgres` will accept |
 | `semantic_search_documents(query_text, limit)` | Postgres | Embeds `query_text` server-side and runs a pgvector cosine-distance search against a fixed, pre-registered table/column — the agent never supplies a table name, column name, or raw embedding vector |
-| `get_dynamodb_item(table, key)` | DynamoDB | Planned |
-| `query_dynamodb_table(table, key_condition, limit)` | DynamoDB | Planned |
+| `list_dynamodb_tables()` | DynamoDB | Lists the registered target names the other `dynamodb_*` tools accept |
+| `get_dynamodb_item(target_name, partition_key_value)` | DynamoDB | Fetches one item by partition key from a registered target — never a raw AWS table name |
+| `list_dynamodb_items(target_name, limit)` | DynamoDB | A capped `Scan`; DynamoDB has no cheaper "list all" without a sort key/GSI to `Query` against |
+| `count_dynamodb_items(target_name)` | DynamoDB | Approximate item count from table metadata (periodically updated, not live — an exact count needs a full unbounded `Scan`, which isn't offered) |
 | `list_collections_mongodb()` | MongoDB | Planned |
 | `vector_search_mongodb(collection, index, query_embedding, limit)` | MongoDB | Planned |
 
@@ -77,6 +79,16 @@ guardrail is real and correct for clients confined to the protocol, but
 it is not sufficient on its own against every kind of client this server
 might be used from.
 
+The same is true for DynamoDB: `engines/dynamodb.py` has no `put_item` or
+`delete_item` method at all, but that's a convenience, not the guardrail.
+A code-capable client with independent `boto3` access and the same AWS
+credentials could call those APIs directly regardless of what this module
+implements. The credentials backing `AWS_REGION`/`AWS_ACCESS_KEY_ID` must
+themselves carry an IAM policy scoped to exactly `dynamodb:GetItem`,
+`dynamodb:Scan`, and `dynamodb:DescribeTable` on the specific table
+ARN(s) in `_TABLE_TARGETS` — that IAM policy, not the missing method, is
+what actually stops a write.
+
 ### 2. No raw queries from the agent — named allowlisted queries only
 
 The agent never sends free-form SQL, a MongoDB filter document, or a
@@ -91,9 +103,12 @@ parameterization (`psycopg` placeholders) — never string interpolation,
 so SQL injection through a parameter value isn't a meaningful attack
 surface here.
 
-The same pattern will carry over to DynamoDB (table-name allowlist plus
-typed key conditions) and MongoDB (collection allowlist plus a restricted
-filter/projection shape with no `$where`/raw JS) in Phases 3–4.
+DynamoDB follows the same pattern (Phase 3, implemented): the agent
+supplies a `target_name` from a fixed `_TABLE_TARGETS` registry in
+`engines/dynamodb.py` — never a raw AWS table name — plus a typed
+partition key value bound through `boto3`'s native parameter handling.
+MongoDB (Phase 4, planned) will use a collection allowlist plus a
+restricted filter/projection shape with no `$where`/raw JS.
 
 Vector search follows the identical shape: `semantic_search_documents`
 takes only a natural-language `query_text` and a `limit`. The server

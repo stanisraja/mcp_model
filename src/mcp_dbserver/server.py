@@ -12,7 +12,8 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .config import MissingCredentialError, PostgresSettings
+from .config import DynamoDBSettings, MissingCredentialError, PostgresSettings
+from .engines.dynamodb import DynamoDBEngine
 from .engines.postgres import PostgresEngine, build_default_allowlist
 
 mcp = FastMCP("multi-engine-db")
@@ -22,6 +23,12 @@ try:
     _postgres_engine = PostgresEngine(PostgresSettings.from_env(), build_default_allowlist())
 except MissingCredentialError:
     _postgres_engine = None
+
+_dynamodb_engine: DynamoDBEngine | None = None
+try:
+    _dynamodb_engine = DynamoDBEngine(DynamoDBSettings.from_env())
+except MissingCredentialError:
+    _dynamodb_engine = None
 
 
 if _postgres_engine is not None:
@@ -63,6 +70,37 @@ if _postgres_engine is not None:
         assert _postgres_engine is not None
         embedding = next(_get_embedding_model().embed([query_text])).tolist()
         return _postgres_engine.semantic_search("documents", embedding, limit)
+
+
+if _dynamodb_engine is not None:
+
+    @mcp.tool()
+    def list_dynamodb_tables() -> list[str]:
+        """List the DynamoDB target names available to the other dynamodb_* tools."""
+        assert _dynamodb_engine is not None
+        return _dynamodb_engine.list_targets()
+
+    @mcp.tool()
+    def get_dynamodb_item(target_name: str, partition_key_value: str) -> dict | None:
+        """Fetch one item by its partition key from a registered DynamoDB target.
+
+        target_name must be one from list_dynamodb_tables() -- never a raw
+        AWS table name.
+        """
+        assert _dynamodb_engine is not None
+        return _dynamodb_engine.get_item(target_name, partition_key_value)
+
+    @mcp.tool()
+    def list_dynamodb_items(target_name: str, limit: int = 100) -> list[dict]:
+        """List items from a registered DynamoDB target (a capped Scan). Row count is capped server-side."""
+        assert _dynamodb_engine is not None
+        return _dynamodb_engine.list_items(target_name, limit)
+
+    @mcp.tool()
+    def count_dynamodb_items(target_name: str) -> dict:
+        """Approximate item count for a registered DynamoDB target (not a live count)."""
+        assert _dynamodb_engine is not None
+        return _dynamodb_engine.count_items(target_name)
 
 
 def main() -> None:

@@ -81,8 +81,13 @@ class PostgresSettings:
 
 @dataclass(frozen=True)
 class DynamoDBSettings:
+    """No table name lives here -- accessible tables come from a fixed
+    registry in engines/dynamodb.py (`_TABLE_TARGETS`), the same pattern
+    Postgres uses for vector search targets. The agent selects a table by
+    a logical target name, never a raw AWS table name.
+    """
+
     region: str
-    table_prefix: str = ""
     endpoint_url: str | None = None
     max_items: int = 500
 
@@ -90,7 +95,6 @@ class DynamoDBSettings:
     def from_env(cls) -> DynamoDBSettings:
         return cls(
             region=_require("AWS_REGION"),
-            table_prefix=os.environ.get("DYNAMODB_TABLE_PREFIX", ""),
             endpoint_url=os.environ.get("DYNAMODB_ENDPOINT_URL"),
             max_items=int(os.environ.get("DYNAMODB_MAX_ITEMS", "500")),
         )
