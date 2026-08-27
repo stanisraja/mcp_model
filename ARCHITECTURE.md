@@ -1,0 +1,246 @@
+# Architecture
+
+## Overview
+
+`mcp-dbserver` is a personal, publicly-shareable MCP (Model Context
+Protocol) server that gives an AI agent (Claude Code, Claude Desktop, or
+any MCP-compatible client) **read-only, security-scoped** access to
+several database engines: PostgreSQL (with pgvector), DynamoDB, and
+MongoDB Atlas (with Atlas Vector Search). MySQL is a stated stretch goal
+and will follow the same pattern as Postgres if added.
+
+The project exists to demonstrate the same architectural discipline used
+for production multi-cloud database estates — least privilege, explicit
+guardrails, no ambient trust — applied to an agentic-tooling context
+where the "caller" is an LLM instead of a service.
+
+No data, schema, table name, or business logic from any employer (current
+or former) appears anywhere in this repo. All datasets are public or
+synthetic, generated specifically for this project.
+
+## Supported engines
+
+| Engine | Status | Notes |
+|---|---|---|
+| PostgreSQL + pgvector | Working (Phase 2/5) | Allowlisted queries + cosine-distance vector search, tested end-to-end via Claude Code |
+| DynamoDB | Working (Phase 3) | `get_item` / capped `scan` / approximate count, fixed table-target registry |
+| MongoDB Atlas + Vector Search | Working (Phase 4) | Fixed collection-target registry, exact count, `$vectorSearch` against the same demo dataset/embeddings as pgvector for direct comparison |
+
+## Tool inventory
+
+Tools are the only surface an agent ever sees — there is no generic
+"run arbitrary query" tool for any engine, on purpose.
+
+| Tool | Engine | Description |
+|---|---|---|
+| `query_postgres(query_name, params)` | Postgres | Runs one named, allowlisted, parameterized SELECT |
+| `list_postgres_queries()` | Postgres | Lists the query names `query_postgres` will accept |
+| `semantic_search_documents(query_text, limit)` | Postgres | Embeds `query_text` server-side and runs a pgvector cosine-distance search against a fixed, pre-registered table/column — the agent never supplies a table name, column name, or raw embedding vector |
+| `list_dynamodb_tables()` | DynamoDB | Lists the registered target names the other `dynamodb_*` tools accept |
+| `get_dynamodb_item(target_name, partition_key_value)` | DynamoDB | Fetches one item by partition key from a registered target — never a raw AWS table name |
+| `list_dynamodb_items(target_name, limit)` | DynamoDB | A capped `Scan`; DynamoDB has no cheaper "list all" without a sort key/GSI to `Query` against |
+| `count_dynamodb_items(target_name)` | DynamoDB | Approximate item count from table metadata (periodically updated, not live — an exact count needs a full unbounded `Scan`, which isn't offered) |
+| `list_mongodb_collections()` | MongoDB | Lists the registered target names the other `mongodb_*` tools accept |
+| `get_mongodb_document(target_name, doc_id)` | MongoDB | Fetches one document by its `id` field from a registered target — never a raw collection name |
+| `list_mongodb_documents(target_name, limit)` | MongoDB | A capped `find({})`. Row count is capped server-side |
+| `count_mongodb_documents(target_name)` | MongoDB | Exact document count — unlike DynamoDB, `count_documents` is cheap enough to expose live |
+| `semantic_search_mongodb(query_text, limit)` | MongoDB | Embeds `query_text` server-side and runs Atlas `$vectorSearch` against a fixed, pre-registered index/field — directly comparable to `semantic_search_documents` (pgvector), since both run against the same demo dataset and embedding model |
+
+## Security model
+
+This is the part of the project that's meant to differentiate it from a
+typical "point an agent at a database" demo. Every layer below is
+deliberate, and each is independently sufficient to stop a write —
+they're stacked so that no single bug is enough to break the read-only
+guarantee.
+
+### 1. Read-only only, in v1
+
+No write, update, or delete tool is registered for any engine. This is a
+deliberate scope decision, not a missing feature: an agent that can only
+read cannot cause data loss, and it removes an entire class of
+authorization bugs (partial-write races, missing-confirmation flows,
+prompt-injection-driven destructive actions) from consideration entirely.
+A write-capable v2, if it ever exists, is a separate, explicitly-scoped
+project with its own threat model — not an incremental unlock of this one.
+
+**A documented boundary, found by testing it:** the "no write tool"
+guardrail constrains what an agent can do *through the MCP protocol*. It
+does not, and architecturally cannot, constrain a client that has
+independent code-execution ability and separate access to the same
+database credentials — e.g. Claude Code running as a general coding
+agent, as opposed to a chat-only client like Claude Desktop. In testing,
+asking Claude Code to delete a row correctly found no write tool
+registered — and then wrote its own `psycopg` script and attempted the
+delete directly, bypassing the MCP server entirely. It failed only
+because the configured role (`global_reader`) lacks write privilege at
+the database level, not because of anything this server enforces. That
+makes the **database-level read-only role** the actual last line of
+defense against an out-of-band write from a code-capable client, not a
+belt-and-suspenders extra as originally framed above — the MCP tool
+guardrail is real and correct for clients confined to the protocol, but
+it is not sufficient on its own against every kind of client this server
+might be used from.
+
+The same is true for DynamoDB: `engines/dynamodb.py` has no `put_item` or
+`delete_item` method at all, but that's a convenience, not the guardrail.
+A code-capable client with independent `boto3` access and the same AWS
+credentials could call those APIs directly regardless of what this module
+implements. The credentials backing `AWS_REGION`/`AWS_ACCESS_KEY_ID` must
+themselves carry an IAM policy scoped to exactly `dynamodb:GetItem`,
+`dynamodb:Scan`, and `dynamodb:DescribeTable` on the specific table
+ARN(s) in `_TABLE_TARGETS` — that IAM policy, not the missing method, is
+what actually stops a write.
+
+Same again for MongoDB: `engines/mongodb.py` has no `insert_one`,
+`update_one`, or `delete_one` anywhere in it, but a code-capable client
+with the same `MONGODB_URI` and independent `pymongo` access could call
+those directly. The Atlas database user behind that connection string
+must be provisioned with the built-in `read` role (not `readWrite`) on
+the target database — that role, not the absence of a write method, is
+what actually stops a write.
+
+### 2. No raw queries from the agent — named allowlisted queries only
+
+The agent never sends free-form SQL, a MongoDB filter document, or a
+DynamoDB key condition expression directly. For Postgres, every query the
+agent can run is a pre-registered `AllowlistedQuery` (`allowlist.py`): a
+fixed SQL template with a fixed parameter list, validated to be read-only
+at *registration time* (`AllowlistedQuery.__post_init__` calls
+`assert_read_only_sql`, so a write template can't even be added to the
+allowlist by a coding mistake). The agent picks a query by name and
+supplies parameter *values*, which are bound through the driver's native
+parameterization (`psycopg` placeholders) — never string interpolation,
+so SQL injection through a parameter value isn't a meaningful attack
+surface here.
+
+DynamoDB follows the same pattern (Phase 3, implemented): the agent
+supplies a `target_name` from a fixed `_TABLE_TARGETS` registry in
+`engines/dynamodb.py` — never a raw AWS table name — plus a typed
+partition key value bound through `boto3`'s native parameter handling.
+
+MongoDB follows it too (Phase 4, implemented): the agent supplies a
+`target_name` from a fixed `_COLLECTION_TARGETS` registry in
+`engines/mongodb.py` — never a raw collection name, and never a raw
+MongoDB filter or aggregation document. There is no generic `find(filter)`
+tool that accepts an agent-supplied filter shape at all (the kind of tool
+that would let `$where`/raw JS in through the back door) — every
+operation is a fixed shape (`get_document` by `id`, `list_documents`,
+`count_documents`, `semantic_search`) with typed parameters, the same
+"named operation, not a query language" boundary Postgres and DynamoDB
+both enforce.
+
+Vector search follows the identical shape: `semantic_search_documents`
+takes only a natural-language `query_text` and a `limit`. The server
+embeds the text locally and resolves a `search_name` (currently hardcoded
+to `"documents"`) against `_VECTOR_SEARCH_TARGETS` — a fixed Python dict
+mapping a name to a `(table, vector_column, select_columns)` triple. There
+is no path from agent input to a table or column identifier; the earlier
+draft of this tool took those as direct arguments and was fixed before the
+server was ever wired up to a live client, precisely because that would
+have been a real SQL injection surface (those values are f-string-
+interpolated into the query, not parameterized) rather than allowlisted
+query text.
+
+### 3. Defense in depth at the query-execution layer
+
+Even though every query reaching the engine already came from the
+allowlist, `guardrails.py` re-validates it independently before
+execution:
+
+- `assert_read_only_sql` rejects anything that isn't a `SELECT`/`WITH`
+  statement, rejects stacked statements (`;`-separated), and rejects a
+  fixed set of forbidden keywords (`INSERT`, `UPDATE`, `DELETE`, `DROP`,
+  `ALTER`, `TRUNCATE`, `GRANT`, `CREATE`, `COPY`, ...) as whole words —
+  not substrings, so a column named `update_count` isn't a false
+  positive.
+- `enforce_row_limit_sql` clamps or injects a `LIMIT` clause so a query
+  can't return an unbounded result set, regardless of what the query
+  template or the caller's requested limit says. The effective cap is
+  `min(query.max_rows, engine_settings.max_rows)` — the server's
+  configured ceiling always wins.
+- Every Postgres connection additionally runs
+  `SET default_transaction_read_only = on` and a `statement_timeout`
+  before any query executes, so even a guardrail bug can't produce a
+  write or a runaway query at the database level.
+
+This is belt-and-suspenders on purpose: the allowlist should be
+sufficient on its own, but the execution-layer checks mean a mistake in
+one allowlist entry doesn't become a live vulnerability.
+
+### 4. Credential handling
+
+- All credentials are read from environment variables (`config.py`), via
+  `python-dotenv` for local development. `.env` is gitignored; only
+  `.env.example` (placeholder values) is committed.
+- Each engine's settings (`PostgresSettings`, `DynamoDBSettings`,
+  `MongoDBSettings`) are constructed lazily and only when that engine's
+  tools are registered — a missing credential means that engine's tools
+  simply aren't exposed, not a crash.
+- Credentials are never logged. No tool or engine method logs connection
+  strings, parameter values, or raw query results at a level above
+  debug, and none of that ever includes the DSN/URI itself.
+- The database role/user behind each connection should itself be
+  provisioned read-only wherever the engine supports it (a Postgres role
+  with only `SELECT` granted, a DynamoDB IAM policy scoped to
+  `dynamodb:GetItem`/`Query`, a MongoDB Atlas database user with the
+  built-in `read` role) — this is a deployment-time requirement, not
+  something the code can enforce, and is called out explicitly here so
+  it isn't skipped.
+- Against RDS specifically, the server supports **RDS IAM database
+  authentication** (`POSTGRES_AUTH_MODE=iam`) as the preferred mode over a
+  stored password: `PostgresEngine` calls `rds:GenerateDBAuthToken` and
+  mints a new, ~15-minute token on every connection, so there is no
+  long-lived database credential anywhere — access is governed by the
+  same IAM policy/role as everything else in the AWS account, and a
+  leaked token is worthless within minutes. This requires the connecting
+  Postgres user to have the `rds_iam` role granted and IAM auth enabled
+  on the instance; DynamoDB access is IAM-native the same way (no
+  DynamoDB-specific secret at all, just AWS credentials scoped to
+  read-only actions).
+
+### 5. Client ↔ server authentication (design intent, not yet implemented)
+
+For local development, the MCP server runs over stdio, launched directly
+by the client (Claude Code / Claude Desktop) as a subprocess — there is
+no network boundary to authenticate across, and the OS process boundary
+is the trust boundary.
+
+For a real deployment (the server running as a long-lived HTTP/SSE
+process reachable by more than one local client), the intended design is:
+
+- Per-client **API keys**, issued out-of-band, sent as a bearer token on
+  every MCP request and checked before any tool call is dispatched.
+- Keys scoped per-engine (a client can be issued a Postgres-only key),
+  mirroring the tool-registration pattern already used for missing
+  credentials.
+- TLS termination in front of the server; no plaintext HTTP in any
+  non-local deployment.
+- mTLS is a plausible upgrade for a tighter-trust deployment (e.g.
+  service-to-service, not human-in-the-loop) but is overkill for a
+  single-operator portfolio deployment and isn't planned for v1.
+
+This is documented here so the gap is visible and deliberate, not
+accidental — the v1 deployment target is "local stdio only," and this
+section is what changes first if that target changes.
+
+## Open design decisions
+
+- **MySQL**: explicitly out of scope for v1; if added, it follows the
+  same allowlist + guardrail pattern as Postgres.
+- **Observability**: no query logging/metrics yet. Before any networked
+  deployment, at minimum: which query name was called, by when, and
+  whether it succeeded (never parameter values or row contents).
+- **Rate limiting**: not implemented. Relevant once the server is
+  reachable by more than a single local stdio client.
+- **DynamoDB/MongoDB allowlist shape (resolved in Phases 3–4)**: rather
+  than a typed schema per allowlisted filter (the option this section
+  originally proposed), both engines ended up with a smaller surface:
+  a fixed target registry (`_TABLE_TARGETS` / `_COLLECTION_TARGETS`)
+  plus a small, fixed set of named operations per engine (`get_item`/
+  `list_items`/`count_items`; `get_document`/`list_documents`/
+  `count_documents`/`semantic_search`) — no generic `find(filter)` or
+  `query(key_condition)` tool that accepts an agent-supplied query shape
+  at all. Simpler than a filter-validation DSL, and closes the same gap:
+  there's no permissive shape for `$where`/raw JS/an arbitrary key
+  condition to hide in, because there's no field for one.
