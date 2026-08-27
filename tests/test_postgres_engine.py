@@ -10,7 +10,7 @@ gated behind POSTGRES_DSN being set.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -96,3 +96,33 @@ def test_vector_search_clamps_limit(settings):
     sql, params = fake_conn.cursor_obj.executed[0]
     assert params["limit"] == settings.max_rows
     assert "documents" in sql
+
+
+def test_iam_auth_mode_fetches_a_fresh_token_and_never_reuses_a_stored_password():
+    settings = PostgresSettings(
+        auth_mode="iam",
+        host="db.example.rds.amazonaws.com",
+        port=5432,
+        dbname="postgres",
+        user="readonly_user",
+        region="us-east-1",
+    )
+    engine = PostgresEngine(settings, QueryAllowlist())
+
+    fake_rds_client = MagicMock()
+    fake_rds_client.generate_db_auth_token.return_value = "fake-iam-token"
+
+    with (
+        patch("mcp_dbserver.engines.postgres.boto3.client", return_value=fake_rds_client) as mock_boto,
+        patch("mcp_dbserver.engines.postgres.psycopg.connect") as mock_connect,
+    ):
+        mock_connect.return_value = FakeConnection(rows=[])
+        engine._connect()
+
+    mock_boto.assert_called_once_with("rds", region_name="us-east-1")
+    fake_rds_client.generate_db_auth_token.assert_called_once_with(
+        DBHostname="db.example.rds.amazonaws.com", Port=5432, DBUsername="readonly_user"
+    )
+    _, kwargs = mock_connect.call_args
+    assert kwargs["password"] == "fake-iam-token"
+    assert kwargs["sslmode"] == "require"

@@ -122,6 +122,17 @@ one allowlist entry doesn't become a live vulnerability.
   built-in `read` role) — this is a deployment-time requirement, not
   something the code can enforce, and is called out explicitly here so
   it isn't skipped.
+- Against RDS specifically, the server supports **RDS IAM database
+  authentication** (`POSTGRES_AUTH_MODE=iam`) as the preferred mode over a
+  stored password: `PostgresEngine` calls `rds:GenerateDBAuthToken` and
+  mints a new, ~15-minute token on every connection, so there is no
+  long-lived database credential anywhere — access is governed by the
+  same IAM policy/role as everything else in the AWS account, and a
+  leaked token is worthless within minutes. This requires the connecting
+  Postgres user to have the `rds_iam` role granted and IAM auth enabled
+  on the instance; DynamoDB access is IAM-native the same way (no
+  DynamoDB-specific secret at all, just AWS credentials scoped to
+  read-only actions).
 
 ### 5. Client ↔ server authentication (design intent, not yet implemented)
 

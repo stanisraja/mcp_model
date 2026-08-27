@@ -4,15 +4,16 @@ Two operations only:
   - run_query: execute a named, allowlisted, parameterized SELECT
   - vector_search: nearest-neighbor search over a pgvector column
 
-No arbitrary SQL, no write access. The DB role backing `POSTGRES_DSN`
-should itself be granted SELECT-only privileges as a second layer of
-defense beyond what this code enforces.
+No arbitrary SQL, no write access. The DB role/user connected as should
+itself be granted SELECT-only privileges as a second layer of defense
+beyond what this code enforces.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import boto3
 import psycopg
 from psycopg.rows import dict_row
 
@@ -36,10 +37,30 @@ class PostgresEngine:
         return self._allowlist
 
     def _connect(self) -> psycopg.Connection:
-        conn = psycopg.connect(self._settings.dsn, row_factory=dict_row)
+        if self._settings.auth_mode == "iam":
+            conn = psycopg.connect(
+                host=self._settings.host,
+                port=self._settings.port,
+                dbname=self._settings.dbname,
+                user=self._settings.user,
+                password=self._generate_iam_auth_token(),
+                sslmode=self._settings.sslmode,
+                row_factory=dict_row,
+            )
+        else:
+            conn = psycopg.connect(self._settings.dsn, row_factory=dict_row)
         with conn.cursor() as cur:
             cur.execute(_SESSION_GUARDRAILS_SQL, (self._settings.statement_timeout_ms,))
         return conn
+
+    def _generate_iam_auth_token(self) -> str:
+        """Mint a short-lived (15 min) RDS IAM auth token; never cached or logged."""
+        client = boto3.client("rds", region_name=self._settings.region)
+        return client.generate_db_auth_token(
+            DBHostname=self._settings.host,
+            Port=self._settings.port,
+            DBUsername=self._settings.user,
+        )
 
     def run_query(self, query_name: str, params: dict[str, Any] | None = None) -> list[dict]:
         """Run a named allowlisted query and return rows as a list of dicts."""

@@ -29,16 +29,53 @@ def _require(name: str) -> str:
 
 @dataclass(frozen=True)
 class PostgresSettings:
-    dsn: str
+    """Two auth modes:
+
+    - "password": a plain connection string in POSTGRES_DSN.
+    - "iam": RDS IAM database authentication — the engine generates a
+      short-lived (15 min) auth token per connection via
+      `rds:GenerateDBAuthToken` instead of using a stored password. This is
+      the preferred mode against RDS: no long-lived DB credential exists
+      anywhere, and access is governed by the same IAM policy/role as the
+      rest of AWS. Requires the target Postgres user to have the `rds_iam`
+      role granted, and the RDS instance to have IAM auth enabled.
+    """
+
+    auth_mode: str = "password"
+    dsn: str | None = None
+    host: str | None = None
+    port: int = 5432
+    dbname: str | None = None
+    user: str | None = None
+    region: str | None = None
+    sslmode: str = "require"
     statement_timeout_ms: int = 5000
     max_rows: int = 500
 
     @classmethod
     def from_env(cls) -> PostgresSettings:
+        auth_mode = os.environ.get("POSTGRES_AUTH_MODE", "password").lower()
+        statement_timeout_ms = int(os.environ.get("POSTGRES_STATEMENT_TIMEOUT_MS", "5000"))
+        max_rows = int(os.environ.get("POSTGRES_MAX_ROWS", "500"))
+
+        if auth_mode == "iam":
+            return cls(
+                auth_mode="iam",
+                host=_require("POSTGRES_HOST"),
+                port=int(os.environ.get("POSTGRES_PORT", "5432")),
+                dbname=os.environ.get("POSTGRES_DBNAME", "postgres"),
+                user=_require("POSTGRES_USER"),
+                region=_require("AWS_REGION"),
+                sslmode=os.environ.get("POSTGRES_SSLMODE", "require"),
+                statement_timeout_ms=statement_timeout_ms,
+                max_rows=max_rows,
+            )
+
         return cls(
+            auth_mode="password",
             dsn=_require("POSTGRES_DSN"),
-            statement_timeout_ms=int(os.environ.get("POSTGRES_STATEMENT_TIMEOUT_MS", "5000")),
-            max_rows=int(os.environ.get("POSTGRES_MAX_ROWS", "500")),
+            statement_timeout_ms=statement_timeout_ms,
+            max_rows=max_rows,
         )
 
 
