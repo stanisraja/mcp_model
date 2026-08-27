@@ -15,6 +15,7 @@ from typing import Any
 
 import boto3
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 
 from ..allowlist import AllowlistedQuery, QueryAllowlist
@@ -25,13 +26,14 @@ from ..guardrails import clamp_limit, enforce_row_limit_sql
 # the app-layer checks in guardrails.py. A misbehaving/compromised query
 # that slipped past allowlisting still cannot write or run unbounded.
 #
-# Two separate statements, not one `;`-joined string: psycopg3 sends a
-# parameterized execute() through Postgres's extended query protocol,
-# which only permits a single statement per prepared execution -- a
-# multi-statement string with a placeholder fails with a syntax error at
-# the parameter marker.
+# `SET` is a configuration command, not a regular DML statement -- Postgres
+# doesn't accept a bind parameter ($1) for it at the wire-protocol level at
+# all, so the timeout value has to be part of the SQL text itself. We still
+# never do raw string interpolation: `sql.Literal` asks psycopg to quote/
+# escape the value client-side before composing the query, the same
+# safety property parameterization gives us, just via a different psycopg
+# API because `SET` doesn't support the placeholder form.
 _SET_READ_ONLY_SQL = "SET default_transaction_read_only = on"
-_SET_STATEMENT_TIMEOUT_SQL = "SET statement_timeout = %s"
 
 
 class PostgresEngine:
@@ -56,9 +58,11 @@ class PostgresEngine:
             )
         else:
             conn = psycopg.connect(self._settings.dsn, row_factory=dict_row)
+        timeout_ms = int(self._settings.statement_timeout_ms)  # guarantee a plain int reaches SQL text
+        set_timeout = sql.SQL("SET statement_timeout = {}").format(sql.Literal(timeout_ms))
         with conn.cursor() as cur:
             cur.execute(_SET_READ_ONLY_SQL)
-            cur.execute(_SET_STATEMENT_TIMEOUT_SQL, (self._settings.statement_timeout_ms,))
+            cur.execute(set_timeout)
         return conn
 
     def _generate_iam_auth_token(self) -> str:
