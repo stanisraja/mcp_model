@@ -43,17 +43,26 @@ if _postgres_engine is not None:
         assert _postgres_engine is not None
         return _postgres_engine.allowlist.names()
 
+    _embedding_model_cache: dict[str, Any] = {}
+
+    def _get_embedding_model():
+        if "model" not in _embedding_model_cache:
+            from fastembed import TextEmbedding
+
+            _embedding_model_cache["model"] = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        return _embedding_model_cache["model"]
+
     @mcp.tool()
-    def vector_search_postgres(
-        table: str,
-        vector_column: str,
-        query_embedding: list[float],
-        select_columns: list[str],
-        limit: int = 10,
-    ) -> list[dict]:
-        """Semantic (cosine-distance) nearest-neighbor search over a pgvector column."""
+    def semantic_search_documents(query_text: str, limit: int = 10) -> list[dict]:
+        """Semantic (cosine-distance) search over the demo documents table.
+
+        query_text is any natural-language string; the server embeds it
+        locally (offline, no external API call) and searches -- the agent
+        never supplies a table name, column name, or a raw embedding vector.
+        """
         assert _postgres_engine is not None
-        return _postgres_engine.vector_search(table, vector_column, query_embedding, select_columns, limit)
+        embedding = next(_get_embedding_model().embed([query_text])).tolist()
+        return _postgres_engine.semantic_search("documents", embedding, limit)
 
 
 def main() -> None:

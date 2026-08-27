@@ -35,7 +35,7 @@ Tools are the only surface an agent ever sees — there is no generic
 |---|---|---|
 | `query_postgres(query_name, params)` | Postgres | Runs one named, allowlisted, parameterized SELECT |
 | `list_postgres_queries()` | Postgres | Lists the query names `query_postgres` will accept |
-| `vector_search_postgres(table, vector_column, query_embedding, select_columns, limit)` | Postgres | pgvector cosine-distance nearest-neighbor search |
+| `semantic_search_documents(query_text, limit)` | Postgres | Embeds `query_text` server-side and runs a pgvector cosine-distance search against a fixed, pre-registered table/column — the agent never supplies a table name, column name, or raw embedding vector |
 | `get_dynamodb_item(table, key)` | DynamoDB | Planned |
 | `query_dynamodb_table(table, key_condition, limit)` | DynamoDB | Planned |
 | `list_collections_mongodb()` | MongoDB | Planned |
@@ -76,6 +76,18 @@ surface here.
 The same pattern will carry over to DynamoDB (table-name allowlist plus
 typed key conditions) and MongoDB (collection allowlist plus a restricted
 filter/projection shape with no `$where`/raw JS) in Phases 3–4.
+
+Vector search follows the identical shape: `semantic_search_documents`
+takes only a natural-language `query_text` and a `limit`. The server
+embeds the text locally and resolves a `search_name` (currently hardcoded
+to `"documents"`) against `_VECTOR_SEARCH_TARGETS` — a fixed Python dict
+mapping a name to a `(table, vector_column, select_columns)` triple. There
+is no path from agent input to a table or column identifier; the earlier
+draft of this tool took those as direct arguments and was fixed before the
+server was ever wired up to a live client, precisely because that would
+have been a real SQL injection surface (those values are f-string-
+interpolated into the query, not parameterized) rather than allowlisted
+query text.
 
 ### 3. Defense in depth at the query-execution layer
 

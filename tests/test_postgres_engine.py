@@ -16,7 +16,7 @@ import pytest
 
 from mcp_dbserver.allowlist import AllowlistedQuery, QueryAllowlist
 from mcp_dbserver.config import PostgresSettings
-from mcp_dbserver.engines.postgres import PostgresEngine
+from mcp_dbserver.engines.postgres import PostgresEngine, VectorSearchTarget
 
 
 class FakeCursor:
@@ -132,6 +132,30 @@ def test_vector_search_casts_the_embedding_parameter_to_vector(settings):
 
     sql, _ = fake_conn.cursor_obj.executed[0]
     assert "%(embedding)s::vector" in sql
+
+
+def test_semantic_search_rejects_unregistered_target(settings):
+    engine, _ = _engine_with_fake_connection(settings, rows=[])
+    with pytest.raises(KeyError):
+        engine.semantic_search("not_registered", query_embedding=[0.1])
+
+
+def test_semantic_search_resolves_table_and_columns_from_the_registry(settings, monkeypatch):
+    from mcp_dbserver.engines import postgres as postgres_module
+
+    monkeypatch.setitem(
+        postgres_module._VECTOR_SEARCH_TARGETS,
+        "fake_target",
+        VectorSearchTarget(table="widgets", vector_column="vec", select_columns=("id",)),
+    )
+    engine, fake_conn = _engine_with_fake_connection(settings, rows=[])
+
+    engine.semantic_search("fake_target", query_embedding=[0.1, 0.2], limit=3)
+
+    sql, params = fake_conn.cursor_obj.executed[0]
+    assert "widgets" in sql
+    assert "vec" in sql
+    assert params["embedding"] == [0.1, 0.2]
 
 
 def test_iam_auth_mode_fetches_a_fresh_token_and_never_reuses_a_stored_password():

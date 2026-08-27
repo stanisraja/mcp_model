@@ -2,7 +2,9 @@
 
 Two operations only:
   - run_query: execute a named, allowlisted, parameterized SELECT
-  - vector_search: nearest-neighbor search over a pgvector column
+  - semantic_search: nearest-neighbor search against a named, pre-registered
+    vector search target (table/column/select-list are never agent input --
+    see `vector_search` for why that boundary matters)
 
 No arbitrary SQL, no write access. The DB role/user connected as should
 itself be granted SELECT-only privileges as a second layer of defense
@@ -11,6 +13,7 @@ beyond what this code enforces.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import boto3
@@ -101,10 +104,12 @@ class PostgresEngine:
     ) -> list[dict]:
         """Nearest-neighbor search using pgvector's `<=>` cosine distance operator.
 
-        `table`, `vector_column`, and `select_columns` are validated against
-        a caller-supplied allowlist by the server layer before this is
-        invoked — this method assumes they're already trusted identifiers,
-        not raw agent input.
+        Not exposed directly as an MCP tool: `table`, `vector_column`, and
+        `select_columns` get f-string-interpolated into the query, so this
+        must only ever be called with server-trusted identifiers -- e.g.
+        from `semantic_search`, which resolves them from a fixed registry,
+        never from agent-supplied arguments. Passing agent input straight
+        through here would be a SQL injection hole.
         """
         bounded_limit = clamp_limit(limit, self._settings.max_rows)
         columns_sql = ", ".join(select_columns)
@@ -122,6 +127,43 @@ class PostgresEngine:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(query_sql, {"embedding": query_embedding, "limit": bounded_limit})
             return cur.fetchall()
+
+    def semantic_search(
+        self, search_name: str, query_embedding: list[float], limit: int = 10
+    ) -> list[dict]:
+        """Run a named, pre-registered vector search. This is what MCP tools call.
+
+        `search_name` selects a `VectorSearchTarget` from `_VECTOR_SEARCH_TARGETS`
+        below -- the agent supplies a query embedding and a name, never a
+        table, column, or select-list.
+        """
+        target = _VECTOR_SEARCH_TARGETS.get(search_name)
+        if target is None:
+            raise KeyError(f"Vector search target {search_name!r} is not registered")
+        return self.vector_search(
+            table=target.table,
+            vector_column=target.vector_column,
+            query_embedding=query_embedding,
+            select_columns=list(target.select_columns),
+            limit=limit,
+        )
+
+
+@dataclass(frozen=True)
+class VectorSearchTarget:
+    table: str
+    vector_column: str
+    select_columns: tuple[str, ...]
+
+
+# The fixed set of vector searches an agent can name via semantic_search().
+# Adding a new one here is the only way to expose a new table/column pair --
+# there is no path from agent input to a table or column name.
+_VECTOR_SEARCH_TARGETS: dict[str, VectorSearchTarget] = {
+    "documents": VectorSearchTarget(
+        table="documents", vector_column="embedding", select_columns=("id", "title", "body")
+    ),
+}
 
 
 def build_default_allowlist() -> QueryAllowlist:

@@ -57,7 +57,6 @@ generate embeddings locally (via `fastembed`'s ONNX runtime — fully
 offline, no external API key needed, and no torch/torchvision dependency):
 
 ```bash
-pip install -e ".[demo]"
 python scripts/load_demo_dataset.py
 ```
 
@@ -70,7 +69,7 @@ python scripts/smoke_test_postgres.py
 
 This creates a `documents` table (with a pgvector `embedding` column) and
 backs the `count_documents`, `list_documents`, and `get_document_by_id`
-entries in the Postgres query allowlist, plus `vector_search_postgres`.
+entries in the Postgres query allowlist, plus `semantic_search_documents`.
 
 Once loaded, sanity-check the data actually made it in and that semantic
 search returns sensible (not just error-free) results:
