@@ -21,6 +21,12 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
 ]
+# Only needed to run scripts/load_demo_dataset.py -- generates local,
+# offline embeddings for the demo dataset. Not a runtime dependency of
+# the MCP server itself.
+demo = [
+    "sentence-transformers>=3.2",
+]
 
 [project.scripts]
 mcp-dbserver = "mcp_dbserver.server:main"

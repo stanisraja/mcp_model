@@ -48,6 +48,30 @@ Tools are only registered for engines whose required environment
 variables are set — e.g. with only `POSTGRES_DSN` set, only the Postgres
 tools appear.
 
+## Postgres demo dataset
+
+`data/demo_documents.jsonl` is a small, synthetic set of ~30 short
+software/infra explainer snippets (written for this project — not from
+any employer). To load it into your configured Postgres instance and
+generate embeddings locally (via `sentence-transformers`, fully offline,
+no external API key needed):
+
+```bash
+pip install -e ".[demo]"
+python scripts/load_demo_dataset.py
+```
+
+Then verify connectivity and the read-only guardrail against your real
+database:
+
+```bash
+python scripts/smoke_test_postgres.py
+```
+
+This creates a `documents` table (with a pgvector `embedding` column) and
+backs the `count_documents`, `list_documents`, and `get_document_by_id`
+entries in the Postgres query allowlist, plus `vector_search_postgres`.
+
 ## Project layout
 
 ```

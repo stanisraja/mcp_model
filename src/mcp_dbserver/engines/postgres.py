@@ -97,13 +97,41 @@ class PostgresEngine:
 
 
 def build_default_allowlist() -> QueryAllowlist:
-    """Placeholder allowlist; real entries are added once the Phase 2 demo dataset is loaded."""
+    """The allowlist backing `query_postgres`, against the demo `documents` table.
+
+    Load the demo dataset first with `scripts/load_demo_dataset.py`.
+    """
     allowlist = QueryAllowlist()
     allowlist.register(
         AllowlistedQuery(
             name="server_version",
             description="Sanity-check query returning the connected Postgres server version.",
             sql="SELECT version() AS version",
+            max_rows=1,
+        )
+    )
+    allowlist.register(
+        AllowlistedQuery(
+            name="count_documents",
+            description="Total number of rows in the demo documents table.",
+            sql="SELECT count(*) AS document_count FROM documents",
+            max_rows=1,
+        )
+    )
+    allowlist.register(
+        AllowlistedQuery(
+            name="list_documents",
+            description="List demo documents (id, title, body), most recently inserted first.",
+            sql="SELECT id, title, body FROM documents ORDER BY id",
+            max_rows=100,
+        )
+    )
+    allowlist.register(
+        AllowlistedQuery(
+            name="get_document_by_id",
+            description="Fetch a single demo document by its integer id.",
+            sql="SELECT id, title, body FROM documents WHERE id = %(id)s",
+            params=("id",),
             max_rows=1,
         )
     )

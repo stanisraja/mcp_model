@@ -61,6 +61,15 @@ def _engine_with_fake_connection(settings, rows):
     allowlist.register(
         AllowlistedQuery(name="widgets", description="", sql="SELECT * FROM widgets", max_rows=1000)
     )
+    allowlist.register(
+        AllowlistedQuery(
+            name="widget_by_id",
+            description="",
+            sql="SELECT * FROM widgets WHERE id = %(id)s",
+            params=("id",),
+            max_rows=1,
+        )
+    )
     engine = PostgresEngine(settings, allowlist)
     fake_conn = FakeConnection(rows)
     engine._connect = MagicMock(return_value=fake_conn)  # bypass real psycopg.connect
@@ -74,6 +83,16 @@ def test_run_query_caps_row_limit_at_settings_max_rows(settings):
 
     sql, _ = fake_conn.cursor_obj.executed[0]
     assert "LIMIT 50" in sql  # settings.max_rows (50) wins over the query's own max_rows (1000)
+
+
+def test_run_query_binds_params_through_the_driver_not_string_interpolation(settings):
+    engine, fake_conn = _engine_with_fake_connection(settings, rows=[{"id": 7}])
+
+    engine.run_query("widget_by_id", {"id": 7})
+
+    sql, params = fake_conn.cursor_obj.executed[0]
+    assert "%(id)s" in sql  # the literal 7 never gets interpolated into the SQL string
+    assert params == {"id": 7}
 
 
 def test_run_query_rejects_unknown_query_name(settings):
