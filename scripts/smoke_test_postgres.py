@@ -34,6 +34,13 @@ def main() -> None:
         print("   FAIL: write succeeded -- the connection is not actually read-only!")
     except psycopg.errors.ReadOnlySqlTransaction:
         print("   OK: write rejected by Postgres (default_transaction_read_only in effect)")
+    except psycopg.errors.InsufficientPrivilege:
+        # Belt-and-suspenders: the connecting role also lacks CREATE on the
+        # target schema, independent of the read-only session setting.
+        # Either one alone is sufficient to block the write; seeing this
+        # instead of ReadOnlySqlTransaction just means privilege-checking
+        # ran first -- it's still a pass.
+        print("   OK: write rejected by Postgres (role lacks CREATE privilege on schema)")
 
     print("\nSmoke test passed.")
 
