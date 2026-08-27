@@ -53,8 +53,8 @@ tools appear.
 `data/demo_documents.jsonl` is a small, synthetic set of ~30 short
 software/infra explainer snippets (written for this project — not from
 any employer). To load it into your configured Postgres instance and
-generate embeddings locally (via `sentence-transformers`, fully offline,
-no external API key needed):
+generate embeddings locally (via `fastembed`'s ONNX runtime — fully
+offline, no external API key needed, and no torch/torchvision dependency):
 
 ```bash
 pip install -e ".[demo]"

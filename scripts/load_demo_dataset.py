@@ -2,8 +2,9 @@
 
 Creates the pgvector extension and a `documents` table if they don't
 already exist, generates a local embedding for each document's body via
-sentence-transformers (all-MiniLM-L6-v2, 384 dims, runs fully offline --
-no external API calls or keys needed), and upserts every row.
+fastembed (BAAI/bge-small-en-v1.5, 384 dims, ONNX runtime -- runs fully
+offline, no external API calls/keys, and deliberately no torch/
+torchvision dependency), and upserts every row.
 
 This connects directly with psycopg using the same PostgresSettings the
 MCP server itself uses (POSTGRES_DSN or the POSTGRES_AUTH_MODE=iam
@@ -71,17 +72,17 @@ def _connect_for_write(settings: PostgresSettings) -> psycopg.Connection:
 
 
 def main() -> None:
-    from sentence_transformers import SentenceTransformer
+    from fastembed import TextEmbedding
 
     settings = PostgresSettings.from_env()
     documents = _load_documents()
     print(f"Loaded {len(documents)} documents from {DATA_FILE}")
 
-    print("Loading embedding model (all-MiniLM-L6-v2)...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = model.encode([doc["body"] for doc in documents], normalize_embeddings=True)
-    assert embeddings.shape[1] == EMBEDDING_DIM, (
-        f"expected {EMBEDDING_DIM}-dim embeddings, got {embeddings.shape[1]}"
+    print("Loading embedding model (BAAI/bge-small-en-v1.5)...")
+    model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+    embeddings = list(model.embed([doc["body"] for doc in documents]))
+    assert len(embeddings[0]) == EMBEDDING_DIM, (
+        f"expected {EMBEDDING_DIM}-dim embeddings, got {len(embeddings[0])}"
     )
 
     with _connect_for_write(settings) as conn, conn.cursor() as cur:

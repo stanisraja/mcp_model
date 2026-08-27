@@ -22,10 +22,12 @@ dev = [
     "ruff>=0.7",
 ]
 # Only needed to run scripts/load_demo_dataset.py -- generates local,
-# offline embeddings for the demo dataset. Not a runtime dependency of
-# the MCP server itself.
+# offline embeddings for the demo dataset via ONNX runtime (no torch/
+# torchvision, deliberately -- avoids that dependency pair's frequent
+# version-mismatch breakage). Not a runtime dependency of the MCP server
+# itself.
 demo = [
-    "sentence-transformers>=3.2",
+    "fastembed>=0.4",
 ]
 
 [project.scripts]
