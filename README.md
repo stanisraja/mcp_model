@@ -5,10 +5,11 @@ read-only, security-scoped access to multiple database engines —
 PostgreSQL, DynamoDB, and MongoDB Atlas — for use by AI agents (Claude
 Code, Claude Desktop, or any MCP-compatible client).
 
-Status: Postgres and DynamoDB tools working end-to-end, tested through
-Claude Code as a real MCP client. See [ARCHITECTURE.md](./ARCHITECTURE.md)
-for the full design, security model, and current tool inventory, and the
-phase checklist below for what's done vs. planned.
+Status: Postgres, DynamoDB, and MongoDB Atlas tools all working, Postgres
+and DynamoDB tested end-to-end through Claude Code as a real MCP client.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design, security
+model, and current tool inventory, and the phase checklist below for
+what's done vs. planned.
 
 ## Why this project
 
@@ -92,6 +93,32 @@ ARN(s) — see the "documented boundary" note in `ARCHITECTURE.md` for why
 that IAM policy, not the absence of a write method in this code, is the
 actual guardrail.
 
+## MongoDB Atlas demo dataset
+
+Mirrors the Postgres setup exactly — same `data/demo_documents.jsonl`,
+same `fastembed` model — so `semantic_search_mongodb` (Atlas Vector
+Search) and `semantic_search_documents` (pgvector) can be compared
+directly against identical data and embeddings. Set `MONGODB_URI` and
+`MONGODB_DATABASE` in `.env` (Atlas connection string, and create the
+database user with the built-in **read** role, not readWrite), then:
+
+```bash
+python scripts/load_demo_dataset_mongodb.py
+```
+
+This upserts the dataset into a `documents` collection and creates the
+Atlas Vector Search index if it doesn't already exist. Index builds are
+asynchronous on Atlas — semantic search may return nothing for a minute
+or two afterward. Verify with:
+
+```bash
+python scripts/verify_demo_dataset_mongodb.py
+```
+
+Collection names aren't configured via environment variables either —
+accessible collections come from a fixed registry in `engines/mongodb.py`
+(`_COLLECTION_TARGETS`), same pattern as DynamoDB's `_TABLE_TARGETS`.
+
 ## Project layout
 
 ```
@@ -102,7 +129,7 @@ src/mcp_dbserver/
   engines/
     postgres.py         # implemented
     dynamodb.py          # implemented
-    mongodb.py            # planned
+    mongodb.py            # implemented
   server.py            # MCP entrypoint, registers tools per configured engine
 tests/                  # guardrail/allowlist/engine unit tests (no live DB needed)
 ```
@@ -113,7 +140,7 @@ tests/                  # guardrail/allowlist/engine unit tests (no live DB need
 - [x] Phase 1 — architecture & security design (`ARCHITECTURE.md`)
 - [x] Phase 2 — Postgres/pgvector tools against a real demo dataset
 - [x] Phase 3 — DynamoDB
-- [ ] Phase 4 — MongoDB Atlas
+- [x] Phase 4 — MongoDB Atlas
 - [x] Phase 5 — wired up and tested with a real MCP client (Claude Code)
 - [ ] Phase 6 — full README with architecture diagram, tool table, "what
       I'd do differently at production scale"

@@ -24,7 +24,7 @@ synthetic, generated specifically for this project.
 |---|---|---|
 | PostgreSQL + pgvector | Working (Phase 2/5) | Allowlisted queries + cosine-distance vector search, tested end-to-end via Claude Code |
 | DynamoDB | Working (Phase 3) | `get_item` / capped `scan` / approximate count, fixed table-target registry |
-| MongoDB Atlas + Vector Search | Planned (Phase 4) | Scoped `find`, `$vectorSearch` |
+| MongoDB Atlas + Vector Search | Working (Phase 4) | Fixed collection-target registry, exact count, `$vectorSearch` against the same demo dataset/embeddings as pgvector for direct comparison |
 
 ## Tool inventory
 
@@ -40,8 +40,11 @@ Tools are the only surface an agent ever sees — there is no generic
 | `get_dynamodb_item(target_name, partition_key_value)` | DynamoDB | Fetches one item by partition key from a registered target — never a raw AWS table name |
 | `list_dynamodb_items(target_name, limit)` | DynamoDB | A capped `Scan`; DynamoDB has no cheaper "list all" without a sort key/GSI to `Query` against |
 | `count_dynamodb_items(target_name)` | DynamoDB | Approximate item count from table metadata (periodically updated, not live — an exact count needs a full unbounded `Scan`, which isn't offered) |
-| `list_collections_mongodb()` | MongoDB | Planned |
-| `vector_search_mongodb(collection, index, query_embedding, limit)` | MongoDB | Planned |
+| `list_mongodb_collections()` | MongoDB | Lists the registered target names the other `mongodb_*` tools accept |
+| `get_mongodb_document(target_name, doc_id)` | MongoDB | Fetches one document by its `id` field from a registered target — never a raw collection name |
+| `list_mongodb_documents(target_name, limit)` | MongoDB | A capped `find({})`. Row count is capped server-side |
+| `count_mongodb_documents(target_name)` | MongoDB | Exact document count — unlike DynamoDB, `count_documents` is cheap enough to expose live |
+| `semantic_search_mongodb(query_text, limit)` | MongoDB | Embeds `query_text` server-side and runs Atlas `$vectorSearch` against a fixed, pre-registered index/field — directly comparable to `semantic_search_documents` (pgvector), since both run against the same demo dataset and embedding model |
 
 ## Security model
 
@@ -89,6 +92,14 @@ themselves carry an IAM policy scoped to exactly `dynamodb:GetItem`,
 ARN(s) in `_TABLE_TARGETS` — that IAM policy, not the missing method, is
 what actually stops a write.
 
+Same again for MongoDB: `engines/mongodb.py` has no `insert_one`,
+`update_one`, or `delete_one` anywhere in it, but a code-capable client
+with the same `MONGODB_URI` and independent `pymongo` access could call
+those directly. The Atlas database user behind that connection string
+must be provisioned with the built-in `read` role (not `readWrite`) on
+the target database — that role, not the absence of a write method, is
+what actually stops a write.
+
 ### 2. No raw queries from the agent — named allowlisted queries only
 
 The agent never sends free-form SQL, a MongoDB filter document, or a
@@ -107,8 +118,17 @@ DynamoDB follows the same pattern (Phase 3, implemented): the agent
 supplies a `target_name` from a fixed `_TABLE_TARGETS` registry in
 `engines/dynamodb.py` — never a raw AWS table name — plus a typed
 partition key value bound through `boto3`'s native parameter handling.
-MongoDB (Phase 4, planned) will use a collection allowlist plus a
-restricted filter/projection shape with no `$where`/raw JS.
+
+MongoDB follows it too (Phase 4, implemented): the agent supplies a
+`target_name` from a fixed `_COLLECTION_TARGETS` registry in
+`engines/mongodb.py` — never a raw collection name, and never a raw
+MongoDB filter or aggregation document. There is no generic `find(filter)`
+tool that accepts an agent-supplied filter shape at all (the kind of tool
+that would let `$where`/raw JS in through the back door) — every
+operation is a fixed shape (`get_document` by `id`, `list_documents`,
+`count_documents`, `semantic_search`) with typed parameters, the same
+"named operation, not a query language" boundary Postgres and DynamoDB
+both enforce.
 
 Vector search follows the identical shape: `semantic_search_documents`
 takes only a natural-language `query_text` and a `limit`. The server
@@ -213,9 +233,14 @@ section is what changes first if that target changes.
   whether it succeeded (never parameter values or row contents).
 - **Rate limiting**: not implemented. Relevant once the server is
   reachable by more than a single local stdio client.
-- **DynamoDB/MongoDB allowlist shape**: the Postgres allowlist is a fixed
-  SQL template per name. The equivalent for DynamoDB (key-condition
-  shape) and MongoDB (filter/projection shape) needs its own validation
-  design in Phases 3–4 — likely a typed schema per allowlisted operation
-  rather than accepting an open-ended filter dict, to avoid quietly
-  reintroducing "raw query" access through a permissive filter shape.
+- **DynamoDB/MongoDB allowlist shape (resolved in Phases 3–4)**: rather
+  than a typed schema per allowlisted filter (the option this section
+  originally proposed), both engines ended up with a smaller surface:
+  a fixed target registry (`_TABLE_TARGETS` / `_COLLECTION_TARGETS`)
+  plus a small, fixed set of named operations per engine (`get_item`/
+  `list_items`/`count_items`; `get_document`/`list_documents`/
+  `count_documents`/`semantic_search`) — no generic `find(filter)` or
+  `query(key_condition)` tool that accepts an agent-supplied query shape
+  at all. Simpler than a filter-validation DSL, and closes the same gap:
+  there's no permissive shape for `$where`/raw JS/an arbitrary key
+  condition to hide in, because there's no field for one.
