@@ -72,6 +72,13 @@ This creates a `documents` table (with a pgvector `embedding` column) and
 backs the `count_documents`, `list_documents`, and `get_document_by_id`
 entries in the Postgres query allowlist, plus `vector_search_postgres`.
 
+Once loaded, sanity-check the data actually made it in and that semantic
+search returns sensible (not just error-free) results:
+
+```bash
+python scripts/verify_demo_dataset.py
+```
+
 ## Project layout
 
 ```
