@@ -15,6 +15,7 @@ from typing import Any
 
 import boto3
 import psycopg
+from pgvector.psycopg import register_vector
 from psycopg import sql
 from psycopg.rows import dict_row
 
@@ -58,6 +59,14 @@ class PostgresEngine:
             )
         else:
             conn = psycopg.connect(self._settings.dsn, row_factory=dict_row)
+
+        # Without this, psycopg sends a Python list/array as a generic
+        # `double precision[]`, and Postgres has no implicit cast from
+        # that to `vector` -- the `<=>` operator in vector_search() fails
+        # to resolve at all. register_vector teaches psycopg the `vector`
+        # wire type explicitly, independent of any column context.
+        register_vector(conn)
+
         timeout_ms = int(self._settings.statement_timeout_ms)  # guarantee a plain int reaches SQL text
         set_timeout = sql.SQL("SET statement_timeout = {}").format(sql.Literal(timeout_ms))
         with conn.cursor() as cur:
@@ -99,12 +108,12 @@ class PostgresEngine:
         """
         bounded_limit = clamp_limit(limit, self._settings.max_rows)
         columns_sql = ", ".join(select_columns)
-        sql = (
+        query_sql = (
             f"SELECT {columns_sql}, {vector_column} <=> %(embedding)s AS distance "
             f"FROM {table} ORDER BY distance ASC LIMIT %(limit)s"
         )
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(sql, {"embedding": query_embedding, "limit": bounded_limit})
+            cur.execute(query_sql, {"embedding": query_embedding, "limit": bounded_limit})
             return cur.fetchall()
 
 

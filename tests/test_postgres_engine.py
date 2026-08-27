@@ -134,6 +134,7 @@ def test_iam_auth_mode_fetches_a_fresh_token_and_never_reuses_a_stored_password(
     with (
         patch("mcp_dbserver.engines.postgres.boto3.client", return_value=fake_rds_client) as mock_boto,
         patch("mcp_dbserver.engines.postgres.psycopg.connect") as mock_connect,
+        patch("mcp_dbserver.engines.postgres.register_vector"),  # needs a real pg_type lookup otherwise
     ):
         mock_connect.return_value = FakeConnection(rows=[])
         engine._connect()
