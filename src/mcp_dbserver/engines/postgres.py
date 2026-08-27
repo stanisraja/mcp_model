@@ -24,7 +24,14 @@ from ..guardrails import clamp_limit, enforce_row_limit_sql
 # Read-only session guardrails applied on every connection, in addition to
 # the app-layer checks in guardrails.py. A misbehaving/compromised query
 # that slipped past allowlisting still cannot write or run unbounded.
-_SESSION_GUARDRAILS_SQL = "SET default_transaction_read_only = on; SET statement_timeout = %s;"
+#
+# Two separate statements, not one `;`-joined string: psycopg3 sends a
+# parameterized execute() through Postgres's extended query protocol,
+# which only permits a single statement per prepared execution -- a
+# multi-statement string with a placeholder fails with a syntax error at
+# the parameter marker.
+_SET_READ_ONLY_SQL = "SET default_transaction_read_only = on"
+_SET_STATEMENT_TIMEOUT_SQL = "SET statement_timeout = %s"
 
 
 class PostgresEngine:
@@ -50,7 +57,8 @@ class PostgresEngine:
         else:
             conn = psycopg.connect(self._settings.dsn, row_factory=dict_row)
         with conn.cursor() as cur:
-            cur.execute(_SESSION_GUARDRAILS_SQL, (self._settings.statement_timeout_ms,))
+            cur.execute(_SET_READ_ONLY_SQL)
+            cur.execute(_SET_STATEMENT_TIMEOUT_SQL, (self._settings.statement_timeout_ms,))
         return conn
 
     def _generate_iam_auth_token(self) -> str:
