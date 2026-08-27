@@ -108,8 +108,15 @@ class PostgresEngine:
         """
         bounded_limit = clamp_limit(limit, self._settings.max_rows)
         columns_sql = ", ".join(select_columns)
+        # Explicit ::vector cast: psycopg sends a plain Python list as a
+        # generic array type (register_vector's dumper only intercepts
+        # numpy.ndarray/Vector, not list), and Postgres won't implicitly
+        # cast an array to `vector` for operator resolution. pgvector
+        # defines an *explicit* cast from array types to vector, which
+        # this invokes directly rather than depending on the parameter's
+        # inferred wire type.
         query_sql = (
-            f"SELECT {columns_sql}, {vector_column} <=> %(embedding)s AS distance "
+            f"SELECT {columns_sql}, {vector_column} <=> %(embedding)s::vector AS distance "
             f"FROM {table} ORDER BY distance ASC LIMIT %(limit)s"
         )
         with self._connect() as conn, conn.cursor() as cur:

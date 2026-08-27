@@ -117,6 +117,23 @@ def test_vector_search_clamps_limit(settings):
     assert "documents" in sql
 
 
+def test_vector_search_casts_the_embedding_parameter_to_vector(settings):
+    # Without this cast, Postgres can't resolve the <=> operator against a
+    # plain Python list (sent as a generic array type) -- regression test
+    # for that failure.
+    engine, fake_conn = _engine_with_fake_connection(settings, rows=[])
+
+    engine.vector_search(
+        table="documents",
+        vector_column="embedding",
+        query_embedding=[0.1, 0.2],
+        select_columns=["id"],
+    )
+
+    sql, _ = fake_conn.cursor_obj.executed[0]
+    assert "%(embedding)s::vector" in sql
+
+
 def test_iam_auth_mode_fetches_a_fresh_token_and_never_reuses_a_stored_password():
     settings = PostgresSettings(
         auth_mode="iam",
