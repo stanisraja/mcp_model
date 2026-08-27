@@ -59,6 +59,24 @@ prompt-injection-driven destructive actions) from consideration entirely.
 A write-capable v2, if it ever exists, is a separate, explicitly-scoped
 project with its own threat model — not an incremental unlock of this one.
 
+**A documented boundary, found by testing it:** the "no write tool"
+guardrail constrains what an agent can do *through the MCP protocol*. It
+does not, and architecturally cannot, constrain a client that has
+independent code-execution ability and separate access to the same
+database credentials — e.g. Claude Code running as a general coding
+agent, as opposed to a chat-only client like Claude Desktop. In testing,
+asking Claude Code to delete a row correctly found no write tool
+registered — and then wrote its own `psycopg` script and attempted the
+delete directly, bypassing the MCP server entirely. It failed only
+because the configured role (`global_reader`) lacks write privilege at
+the database level, not because of anything this server enforces. That
+makes the **database-level read-only role** the actual last line of
+defense against an out-of-band write from a code-capable client, not a
+belt-and-suspenders extra as originally framed above — the MCP tool
+guardrail is real and correct for clients confined to the protocol, but
+it is not sufficient on its own against every kind of client this server
+might be used from.
+
 ### 2. No raw queries from the agent — named allowlisted queries only
 
 The agent never sends free-form SQL, a MongoDB filter document, or a
